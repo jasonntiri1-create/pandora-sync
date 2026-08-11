@@ -185,30 +185,42 @@ jobs:
 
           echo "Source is stable at $SOURCE_SHA."
 
-      - name: Synchronize all repositories
-        env:
-          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
-        run: |
-          set -e
+        - name: Synchronize all repositories
+    env:
+      SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+    run: |
+      set -e
 
-          REPOS=(
-            "jasonntiri1-create/Pandora"
-            "jasonntiri1-create/spark-your-sparkle"
-            "jasonntiri1-create/link-happy-stuff"
-            "jasonntiri1-create/my-private-space"
-          )
+      REPOS=(
+        "jasonntiri1-create/Pandora"
+        "jasonntiri1-create/spark-your-sparkle"
+        "jasonntiri1-create/link-happy-stuff"
+        "jasonntiri1-create/my-private-space"
+      )
 
-          for REPO in "${REPOS[@]}"; do
-            echo "Synchronizing $REPO..."
+      git fetch origin main
 
-            gh api \
-              --method PATCH \
-              "repos/$REPO/git/refs/heads/main" \
-              -f sha="$SOURCE_SHA" \
-              -F force=true
+      for REPO in "${REPOS[@]}"; do
+        echo "Synchronizing $REPO..."
 
-            echo "$REPO -> $SOURCE_SHA"
-          done
+        if [ "$REPO" = "$SOURCE_REPO" ]; then
+          echo "Skipping source repository."
+          continue
+        fi
+
+        git remote remove sync-target 2>/dev/null || true
+
+        git remote add sync-target \
+          "https://x-access-token:${SYNC_TOKEN}@github.com/${REPO}.git"
+
+        git fetch sync-target main
+
+        git push sync-target \
+          "origin/main:refs/heads/main" \
+          --force
+
+        echo "$REPO -> $SOURCE_SHA"
+      done
 
       - name: Verify synchronization
         env:
