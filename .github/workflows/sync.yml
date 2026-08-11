@@ -16,12 +16,51 @@ permissions:
   contents: read
 
 jobs:
-  status:
+  sync:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Show synchronization request
+      - name: Validate source
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          SOURCE_REPO: ${{ inputs.source_repo }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
-          echo "Source repository: ${{ inputs.source_repo }}"
-          echo "Source commit: ${{ inputs.source_sha }}"
-          echo "Synchronization controller received the request."
+          set -e
+
+          echo "Source repository: $SOURCE_REPO"
+          echo "Source commit: $SOURCE_SHA"
+
+          gh api "repos/$SOURCE_REPO/commits/$SOURCE_SHA" > /dev/null
+
+          echo "Source commit verified."
+
+      - name: Check repository states
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          SOURCE_REPO: ${{ inputs.source_repo }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -e
+
+          REPOS=(
+            "jasonntiri1-create/Pandora"
+            "jasonntiri1-create/spark-your-sparkle"
+            "jasonntiri1-create/link-happy-stuff"
+            "jasonntiri1-create/my-private-space"
+          )
+
+          echo "Repository states:"
+
+          for REPO in "${REPOS[@]}"; do
+            SHA=$(gh api "repos/$REPO/commits/main" --jq '.sha')
+
+            echo "$REPO -> $SHA"
+
+            if [ "$REPO" = "$SOURCE_REPO" ]; then
+              if [ "$SHA" != "$SOURCE_SHA" ]; then
+                echo "ERROR: source repository does not point to the supplied commit."
+                exit 1
+              fi
+            fi
+          done
