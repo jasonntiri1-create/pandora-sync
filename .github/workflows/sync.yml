@@ -69,7 +69,6 @@ jobs:
             source
 
           cd source
-
           git checkout "$SOURCE_SHA"
 
           echo "Source repository checked out successfully."
@@ -114,11 +113,9 @@ jobs:
 
             echo "Replacing repository files with source files..."
 
-            find . -mindepth 1 -maxdepth 1 \
-              ! -name ".git" \
-              -exec rm -rf {} +
-
-            cp -a ../source/. .
+            rsync -a --delete \
+              --exclude=".git/" \
+              ../source/ ./
 
             git add -A
 
