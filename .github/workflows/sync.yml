@@ -11,7 +11,6 @@ on:
         description: "Repository that changed"
         required: true
         type: string
-
       source_sha:
         description: "Commit SHA"
         required: true
@@ -35,7 +34,6 @@ jobs:
           fetch-depth: 0
 
       - name: Determine source
-        id: source
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_REPO: ${{ inputs.source_repo }}
@@ -53,6 +51,11 @@ jobs:
             SOURCE_SHA="$INPUT_SHA"
           fi
 
+          if [ -z "$SOURCE_REPO" ] || [ -z "$SOURCE_SHA" ]; then
+            echo "ERROR: Source repository or SHA is missing."
+            exit 1
+          fi
+
           echo "SOURCE_REPO=$SOURCE_REPO" >> "$GITHUB_ENV"
           echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
 
@@ -60,7 +63,6 @@ jobs:
           echo "Source commit: $SOURCE_SHA"
 
       - name: Load synchronization state
-        id: state
         run: |
           set -e
 
@@ -69,7 +71,7 @@ jobs:
             exit 1
           fi
 
-          LAST_SYNC_SHA=$(cat sync-state.txt | tr -d '[:space:]')
+          LAST_SYNC_SHA=$(tr -d '[:space:]' < sync-state.txt)
 
           if [ -z "$LAST_SYNC_SHA" ]; then
             echo "ERROR: sync-state.txt is empty."
@@ -92,7 +94,7 @@ jobs:
 
           echo "Source commit exists."
 
-      - name: Inspect all repositories
+      - name: Inspect repository versions
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
@@ -105,77 +107,83 @@ jobs:
             "jasonntiri1-create/my-private-space"
           )
 
-          CHANGED_COUNT=0
-
           echo "Repository state:"
           echo "----------------"
+
+          SOURCE_PRESENT=false
+          CONFLICT=false
+
+          declare -A SHA_COUNTS
 
           for REPO in "${REPOS[@]}"; do
             SHA=$(gh api "repos/$REPO/commits/main" --jq '.sha')
 
             echo "$REPO -> $SHA"
 
-            if [ "$SHA" != "$LAST_SYNC_SHA" ]; then
-              CHANGED_COUNT=$((CHANGED_COUNT + 1))
+            SHA_COUNTS["$SHA"]=$(( ${SHA_COUNTS["$SHA"]:-0} + 1 ))
 
-              if [ "$REPO" != "$SOURCE_REPO" ]; then
-                echo ""
-                echo "WARNING: $REPO has changed independently."
-              fi
+            if [ "$SHA" = "$SOURCE_SHA" ]; then
+              SOURCE_PRESENT=true
             fi
           done
 
           echo ""
-          echo "Repositories different from last synchronized state: $CHANGED_COUNT"
+          echo "Last synchronized SHA: $LAST_SYNC_SHA"
+          echo "Incoming source SHA:   $SOURCE_SHA"
+          echo ""
 
-          if [ "$CHANGED_COUNT" -gt 1 ]; then
+          if [ "$SOURCE_PRESENT" != "true" ]; then
+            echo "ERROR: The incoming source SHA is not currently the HEAD of any target repository."
+            echo "The source may have moved or the notification may be stale."
+            exit 1
+          fi
+
+          echo "Current SHA groups:"
+
+          for SHA in "${!SHA_COUNTS[@]}"; do
+            COUNT="${SHA_COUNTS[$SHA]}"
+            echo "$SHA -> $COUNT repository/repositories"
+
+            if [ "$SHA" != "$LAST_SYNC_SHA" ] && [ "$SHA" != "$SOURCE_SHA" ]; then
+              echo ""
+              echo "CONFLICT DETECTED."
+              echo "A repository contains a different new version:"
+              echo "$SHA"
+              echo ""
+              echo "Expected synchronized version:"
+              echo "$SOURCE_SHA"
+              CONFLICT=true
+            fi
+          done
+
+          if [ "$CONFLICT" = "true" ]; then
             echo ""
-            echo "CONFLICT DETECTED."
-            echo "More than one repository has changed since the last synchronization."
             echo "No repository will be overwritten."
             exit 1
           fi
 
-      - name: Verify source is the only change
+          echo ""
+          echo "All repositories that moved beyond the previous baseline"
+          echo "agree with the incoming source version."
+
+      - name: Verify source has not moved
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
           set -e
 
-          REPOS=(
-            "jasonntiri1-create/Pandora"
-            "jasonntiri1-create/spark-your-sparkle"
-            "jasonntiri1-create/link-happy-stuff"
-            "jasonntiri1-create/my-private-space"
-          )
-
-          SOURCE_CURRENT_SHA=$(gh api \
+          CURRENT_SOURCE_SHA=$(gh api \
             "repos/$SOURCE_REPO/commits/main" \
             --jq '.sha')
 
-          if [ "$SOURCE_CURRENT_SHA" != "$SOURCE_SHA" ]; then
-            echo "ERROR: source repository has moved since the notification."
+          if [ "$CURRENT_SOURCE_SHA" != "$SOURCE_SHA" ]; then
+            echo "ERROR: Source repository changed during synchronization."
             echo "Expected: $SOURCE_SHA"
-            echo "Actual:   $SOURCE_CURRENT_SHA"
+            echo "Actual:   $CURRENT_SOURCE_SHA"
             exit 1
           fi
 
-          for REPO in "${REPOS[@]}"; do
-            if [ "$REPO" = "$SOURCE_REPO" ]; then
-              continue
-            fi
-
-            SHA=$(gh api "repos/$REPO/commits/main" --jq '.sha')
-
-            if [ "$SHA" != "$LAST_SYNC_SHA" ]; then
-              echo "ERROR: $REPO changed independently."
-              echo "Last synchronized: $LAST_SYNC_SHA"
-              echo "Current:            $SHA"
-              exit 1
-            fi
-          done
-
-          echo "Source is the only repository that changed."
+          echo "Source is stable at $SOURCE_SHA."
 
       - name: Synchronize all repositories
         env:
@@ -215,6 +223,8 @@ jobs:
             "jasonntiri1-create/my-private-space"
           )
 
+          FAILED=false
+
           for REPO in "${REPOS[@]}"; do
             SHA=$(gh api "repos/$REPO/commits/main" --jq '.sha')
 
@@ -222,11 +232,15 @@ jobs:
               echo "ERROR: $REPO failed synchronization."
               echo "Expected: $SOURCE_SHA"
               echo "Actual:   $SHA"
-              exit 1
+              FAILED=true
+            else
+              echo "$REPO synchronized successfully."
             fi
-
-            echo "$REPO synchronized successfully."
           done
+
+          if [ "$FAILED" = "true" ]; then
+            exit 1
+          fi
 
       - name: Update synchronization state
         run: |
@@ -245,5 +259,4 @@ jobs:
           fi
 
           git commit -m "Update sync state to $SOURCE_SHA"
-
           git push origin HEAD:main
