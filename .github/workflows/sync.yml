@@ -1,0 +1,20 @@
+name: Pandora Sync Controller
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Show configured repositories
+        run: |
+          echo "Pandora repositories:"
+          echo "- jasonntiri1-create/Pandora"
+          echo "- jasonntiri1-create/spark-your-sparkle"
+          echo "- jasonntiri1-create/link-happy-stuff"
+          echo "- jasonntiri1-create/my-private-space"
