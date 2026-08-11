@@ -1,29 +1,39 @@
 name: Pandora Sync Controller
 
 on:
-  workflow_dispatch:
-    inputs:
-      source_repo:
-        description: "Repository that received the change"
-        required: true
-        type: string
-      source_sha:
-        description: "Commit to synchronize"
-        required: true
-        type: string
-
   repository_dispatch:
     types:
       - repository_changed
 
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: "Repository that changed"
+        required: true
+        type: string
+
+      source_sha:
+        description: "Commit SHA"
+        required: true
+        type: string
+
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: pandora-sync
+  cancel-in-progress: false
 
 jobs:
-  validate:
+  sync:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout sync state
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Determine source
         id: source
         env:
@@ -43,29 +53,48 @@ jobs:
             SOURCE_SHA="$INPUT_SHA"
           fi
 
+          echo "SOURCE_REPO=$SOURCE_REPO" >> "$GITHUB_ENV"
+          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
+
           echo "Source repository: $SOURCE_REPO"
           echo "Source commit: $SOURCE_SHA"
 
-          echo "SOURCE_REPO=$SOURCE_REPO" >> "$GITHUB_OUTPUT"
-          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Load synchronization state
+        id: state
+        run: |
+          set -e
+
+          if [ ! -f sync-state.txt ]; then
+            echo "ERROR: sync-state.txt does not exist."
+            exit 1
+          fi
+
+          LAST_SYNC_SHA=$(cat sync-state.txt | tr -d '[:space:]')
+
+          if [ -z "$LAST_SYNC_SHA" ]; then
+            echo "ERROR: sync-state.txt is empty."
+            exit 1
+          fi
+
+          echo "LAST_SYNC_SHA=$LAST_SYNC_SHA" >> "$GITHUB_ENV"
+
+          echo "Last synchronized commit: $LAST_SYNC_SHA"
 
       - name: Verify source commit
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
-          SOURCE_REPO: ${{ steps.source.outputs.SOURCE_REPO }}
-          SOURCE_SHA: ${{ steps.source.outputs.SOURCE_SHA }}
         run: |
           set -e
 
-          gh api "repos/$SOURCE_REPO/commits/$SOURCE_SHA" > /dev/null
+          gh api \
+            "repos/$SOURCE_REPO/commits/$SOURCE_SHA" \
+            > /dev/null
 
-          echo "Source commit verified."
+          echo "Source commit exists."
 
-      - name: Check repository states
+      - name: Inspect all repositories
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
-          SOURCE_REPO: ${{ steps.source.outputs.SOURCE_REPO }}
-          SOURCE_SHA: ${{ steps.source.outputs.SOURCE_SHA }}
         run: |
           set -e
 
@@ -76,15 +105,145 @@ jobs:
             "jasonntiri1-create/my-private-space"
           )
 
-          echo "Current repository states:"
+          CHANGED_COUNT=0
+
+          echo "Repository state:"
+          echo "----------------"
 
           for REPO in "${REPOS[@]}"; do
             SHA=$(gh api "repos/$REPO/commits/main" --jq '.sha')
 
             echo "$REPO -> $SHA"
 
-            if [ "$REPO" = "$SOURCE_REPO" ] && [ "$SHA" != "$SOURCE_SHA" ]; then
-              echo "ERROR: supplied source commit does not match source main."
+            if [ "$SHA" != "$LAST_SYNC_SHA" ]; then
+              CHANGED_COUNT=$((CHANGED_COUNT + 1))
+
+              if [ "$REPO" != "$SOURCE_REPO" ]; then
+                echo ""
+                echo "WARNING: $REPO has changed independently."
+              fi
+            fi
+          done
+
+          echo ""
+          echo "Repositories different from last synchronized state: $CHANGED_COUNT"
+
+          if [ "$CHANGED_COUNT" -gt 1 ]; then
+            echo ""
+            echo "CONFLICT DETECTED."
+            echo "More than one repository has changed since the last synchronization."
+            echo "No repository will be overwritten."
+            exit 1
+          fi
+
+      - name: Verify source is the only change
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          set -e
+
+          REPOS=(
+            "jasonntiri1-create/Pandora"
+            "jasonntiri1-create/spark-your-sparkle"
+            "jasonntiri1-create/link-happy-stuff"
+            "jasonntiri1-create/my-private-space"
+          )
+
+          SOURCE_CURRENT_SHA=$(gh api \
+            "repos/$SOURCE_REPO/commits/main" \
+            --jq '.sha')
+
+          if [ "$SOURCE_CURRENT_SHA" != "$SOURCE_SHA" ]; then
+            echo "ERROR: source repository has moved since the notification."
+            echo "Expected: $SOURCE_SHA"
+            echo "Actual:   $SOURCE_CURRENT_SHA"
+            exit 1
+          fi
+
+          for REPO in "${REPOS[@]}"; do
+            if [ "$REPO" = "$SOURCE_REPO" ]; then
+              continue
+            fi
+
+            SHA=$(gh api "repos/$REPO/commits/main" --jq '.sha')
+
+            if [ "$SHA" != "$LAST_SYNC_SHA" ]; then
+              echo "ERROR: $REPO changed independently."
+              echo "Last synchronized: $LAST_SYNC_SHA"
+              echo "Current:            $SHA"
               exit 1
             fi
           done
+
+          echo "Source is the only repository that changed."
+
+      - name: Synchronize all repositories
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          set -e
+
+          REPOS=(
+            "jasonntiri1-create/Pandora"
+            "jasonntiri1-create/spark-your-sparkle"
+            "jasonntiri1-create/link-happy-stuff"
+            "jasonntiri1-create/my-private-space"
+          )
+
+          for REPO in "${REPOS[@]}"; do
+            echo "Synchronizing $REPO..."
+
+            gh api \
+              --method PATCH \
+              "repos/$REPO/git/refs/heads/main" \
+              -f sha="$SOURCE_SHA" \
+              -F force=true
+
+            echo "$REPO -> $SOURCE_SHA"
+          done
+
+      - name: Verify synchronization
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          set -e
+
+          REPOS=(
+            "jasonntiri1-create/Pandora"
+            "jasonntiri1-create/spark-your-sparkle"
+            "jasonntiri1-create/link-happy-stuff"
+            "jasonntiri1-create/my-private-space"
+          )
+
+          for REPO in "${REPOS[@]}"; do
+            SHA=$(gh api "repos/$REPO/commits/main" --jq '.sha')
+
+            if [ "$SHA" != "$SOURCE_SHA" ]; then
+              echo "ERROR: $REPO failed synchronization."
+              echo "Expected: $SOURCE_SHA"
+              echo "Actual:   $SHA"
+              exit 1
+            fi
+
+            echo "$REPO synchronized successfully."
+          done
+
+      - name: Update synchronization state
+        run: |
+          set -e
+
+          echo "$SOURCE_SHA" > sync-state.txt
+
+          git config user.name "pandora-sync"
+          git config user.email "pandora-sync@users.noreply.github.com"
+
+          git add sync-state.txt
+
+          if git diff --cached --quiet; then
+            echo "Synchronization state already current."
+            exit 0
+          fi
+
+          git commit -m "Update sync state to $SOURCE_SHA"
+
+          git push origin HEAD:main
