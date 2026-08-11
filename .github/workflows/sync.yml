@@ -138,10 +138,10 @@ jobs:
             cd ..
           done
 
-        - name: Verify file synchronization
-      env:
-        GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
-      run: |
+      - name: Verify file synchronization
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
           set -e
 
           cd source
