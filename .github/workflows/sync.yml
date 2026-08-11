@@ -2,6 +2,15 @@ name: Pandora Sync Controller
 
 on:
   workflow_dispatch:
+    inputs:
+      source_repo:
+        description: "Repository that received the change"
+        required: true
+        type: string
+      source_sha:
+        description: "Commit to synchronize"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,10 +20,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Show configured repositories
+      - name: Show synchronization request
         run: |
-          echo "Pandora repositories:"
-          echo "- jasonntiri1-create/Pandora"
-          echo "- jasonntiri1-create/spark-your-sparkle"
-          echo "- jasonntiri1-create/link-happy-stuff"
-          echo "- jasonntiri1-create/my-private-space"
+          echo "Source repository: ${{ inputs.source_repo }}"
+          echo "Source commit: ${{ inputs.source_sha }}"
+          echo "Synchronization controller received the request."
