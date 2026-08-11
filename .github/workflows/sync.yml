@@ -85,6 +85,7 @@ jobs:
             "jasonntiri1-create/spark-your-sparkle"
             "jasonntiri1-create/link-happy-stuff"
             "jasonntiri1-create/my-private-space"
+            "jasonntiri1-create/seamless-integration"
           )
 
           for REPO in "${REPOS[@]}"; do
