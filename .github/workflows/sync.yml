@@ -112,16 +112,17 @@ jobs:
             git config user.name "pandora-sync"
             git config user.email "pandora-sync@users.noreply.github.com"
 
-            echo "Replacing repository files with source files..."
+            echo "Replacing repository files with source files (preserving target workflows)..."
 
             rsync -a --delete \
               --exclude=".git/" \
+              --exclude=".github/workflows/" \
               ../source/ ./
 
             git add -A
 
             if git diff --cached --quiet; then
-              echo "$REPO already has identical files."
+              echo "$REPO already has identical synchronized files."
               cd ..
               continue
             fi
@@ -147,6 +148,7 @@ jobs:
           find . \
             -type f \
             -not -path "./.git/*" \
+            -not -path "./.github/workflows/*" \
             -print0 \
             | sort -z \
             | xargs -0 sha256sum \
@@ -159,6 +161,7 @@ jobs:
             "jasonntiri1-create/spark-your-sparkle"
             "jasonntiri1-create/link-happy-stuff"
             "jasonntiri1-create/my-private-space"
+            "jasonntiri1-create/seamless-integration"
           )
 
           for REPO in "${REPOS[@]}"; do
@@ -177,6 +180,7 @@ jobs:
             find . \
               -type f \
               -not -path "./.git/*" \
+              -not -path "./.github/workflows/*" \
               -print0 \
               | sort -z \
               | xargs -0 sha256sum \
@@ -185,14 +189,15 @@ jobs:
             cd ..
 
             if ! diff -u source-files.sha256 target-files.sha256; then
-              echo "ERROR: File contents differ in $REPO"
+              echo "ERROR: Synchronized file contents differ in $REPO"
               exit 1
             fi
 
-            echo "$REPO: FILES IDENTICAL"
+            echo "$REPO: SYNCHRONIZED FILES IDENTICAL (target workflows preserved)"
           done
 
           echo ""
           echo "========================================"
-          echo "ALL REPOSITORIES HAVE IDENTICAL FILES"
+          echo "ALL REPOSITORIES SYNCHRONIZED"
+          echo "TARGET GITHUB WORKFLOWS PRESERVED"
           echo "========================================"
