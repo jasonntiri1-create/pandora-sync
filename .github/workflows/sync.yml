@@ -12,24 +12,50 @@ on:
         required: true
         type: string
 
+  repository_dispatch:
+    types:
+      - repository_changed
+
 permissions:
   contents: read
 
 jobs:
-  sync:
+  validate:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Validate source
+      - name: Determine source
+        id: source
         env:
-          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
-          SOURCE_REPO: ${{ inputs.source_repo }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_REPO: ${{ inputs.source_repo }}
+          INPUT_SHA: ${{ inputs.source_sha }}
+          EVENT_REPO: ${{ github.event.client_payload.source_repo }}
+          EVENT_SHA: ${{ github.event.client_payload.source_sha }}
         run: |
           set -e
 
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            SOURCE_REPO="$EVENT_REPO"
+            SOURCE_SHA="$EVENT_SHA"
+          else
+            SOURCE_REPO="$INPUT_REPO"
+            SOURCE_SHA="$INPUT_SHA"
+          fi
+
           echo "Source repository: $SOURCE_REPO"
           echo "Source commit: $SOURCE_SHA"
+
+          echo "SOURCE_REPO=$SOURCE_REPO" >> "$GITHUB_OUTPUT"
+          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Verify source commit
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          SOURCE_REPO: ${{ steps.source.outputs.SOURCE_REPO }}
+          SOURCE_SHA: ${{ steps.source.outputs.SOURCE_SHA }}
+        run: |
+          set -e
 
           gh api "repos/$SOURCE_REPO/commits/$SOURCE_SHA" > /dev/null
 
@@ -38,8 +64,8 @@ jobs:
       - name: Check repository states
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
-          SOURCE_REPO: ${{ inputs.source_repo }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_REPO: ${{ steps.source.outputs.SOURCE_REPO }}
+          SOURCE_SHA: ${{ steps.source.outputs.SOURCE_SHA }}
         run: |
           set -e
 
@@ -50,17 +76,15 @@ jobs:
             "jasonntiri1-create/my-private-space"
           )
 
-          echo "Repository states:"
+          echo "Current repository states:"
 
           for REPO in "${REPOS[@]}"; do
             SHA=$(gh api "repos/$REPO/commits/main" --jq '.sha')
 
             echo "$REPO -> $SHA"
 
-            if [ "$REPO" = "$SOURCE_REPO" ]; then
-              if [ "$SHA" != "$SOURCE_SHA" ]; then
-                echo "ERROR: source repository does not point to the supplied commit."
-                exit 1
-              fi
+            if [ "$REPO" = "$SOURCE_REPO" ] && [ "$SHA" != "$SOURCE_SHA" ]; then
+              echo "ERROR: supplied source commit does not match source main."
+              exit 1
             fi
           done
