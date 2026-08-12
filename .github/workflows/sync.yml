@@ -1,8 +1,12 @@
 name: Pandora File Sync
 
 on:
-  # Keep the original push-driven path available when the source notifier
-  # can dispatch successfully.
+  push:
+    branches:
+      - main
+
+  # Keep the original push-driven path available when another controller
+  # dispatches a repository_changed event.
   repository_dispatch:
     types:
       - repository_changed
