@@ -1,32 +1,19 @@
 name: Pandora File Sync
 
 on:
-  push:
-    branches:
-      - main
-
-  # Keep the original push-driven path available when another controller
-  # dispatches a repository_changed event.
   repository_dispatch:
     types:
       - repository_changed
-
-  # Reliable fallback: the sync controller polls Pandora directly, so sync
-  # does not depend on a second workflow in the source repository.
-  schedule:
-    - cron: "*/5 * * * *"
 
   workflow_dispatch:
     inputs:
       source_repo:
         description: "Repository that changed"
-        required: false
-        default: "jasonntiri1-create/Pandora"
+        required: true
         type: string
       source_sha:
-        description: "Commit SHA from source repository (leave empty to use main)"
-        required: false
-        default: ""
+        description: "Commit SHA from source repository"
+        required: true
         type: string
 
 permissions:
@@ -49,23 +36,15 @@ jobs:
           DISPATCH_SHA: ${{ github.event.client_payload.source_sha }}
           INPUT_REPO: ${{ inputs.source_repo }}
           INPUT_SHA: ${{ inputs.source_sha }}
-          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
-          set -euo pipefail
+          set -e
 
-          if [ "$EVENT_NAME" = "repository_dispatch" ] && [ -n "$DISPATCH_REPO" ]; then
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
             SOURCE_REPO="$DISPATCH_REPO"
             SOURCE_SHA="$DISPATCH_SHA"
-          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            SOURCE_REPO="${INPUT_REPO:-jasonntiri1-create/Pandora}"
-            SOURCE_SHA="$INPUT_SHA"
           else
-            SOURCE_REPO="jasonntiri1-create/Pandora"
-            SOURCE_SHA=""
-          fi
-
-          if [ -z "$SOURCE_SHA" ]; then
-            SOURCE_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${SOURCE_REPO}.git" refs/heads/main | awk '{print $1}')"
+            SOURCE_REPO="$INPUT_REPO"
+            SOURCE_SHA="$INPUT_SHA"
           fi
 
           if [ -z "$SOURCE_REPO" ] || [ -z "$SOURCE_SHA" ]; then
@@ -83,7 +62,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
-          set -euo pipefail
+          set -e
 
           git clone \
             "https://x-access-token:${GH_TOKEN}@github.com/${SOURCE_REPO}.git" \
@@ -99,7 +78,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
-          set -euo pipefail
+          set -e
 
           REPOS=(
             "jasonntiri1-create/Pandora"
@@ -127,7 +106,9 @@ jobs:
               target
 
             cd target
+
             git checkout main
+
             git config user.name "pandora-sync"
             git config user.email "pandora-sync@users.noreply.github.com"
 
@@ -146,10 +127,13 @@ jobs:
               continue
             fi
 
-            git commit -m "Sync files from $SOURCE_REPO"
+            git commit \
+              -m "Sync files from $SOURCE_REPO"
+
             git push origin main
 
             echo "$REPO synchronized."
+
             cd ..
           done
 
@@ -157,9 +141,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
-          set -euo pipefail
+          set -e
 
           cd source
+
           find . \
             -type f \
             -not -path "./.git/*" \
@@ -168,6 +153,7 @@ jobs:
             | sort -z \
             | xargs -0 sha256sum \
             > ../source-files.sha256
+
           cd ..
 
           REPOS=(
@@ -184,11 +170,13 @@ jobs:
             fi
 
             rm -rf verify
+
             git clone --quiet \
               "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" \
               verify
 
             cd verify
+
             find . \
               -type f \
               -not -path "./.git/*" \
@@ -197,6 +185,7 @@ jobs:
               | sort -z \
               | xargs -0 sha256sum \
               > ../target-files.sha256
+
             cd ..
 
             if ! diff -u source-files.sha256 target-files.sha256; then
