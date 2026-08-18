@@ -50,8 +50,6 @@ jobs:
             SOURCE_REPO="$INPUT_REPO"
             SOURCE_SHA="$INPUT_SHA"
           else
-            # A direct change to the sync controller is also a request to
-            # synchronize the current canonical seamless-integration tree.
             SOURCE_REPO="jasonntiri1-create/seamless-integration"
             SOURCE_SHA="$(git ls-remote "https://github.com/${SOURCE_REPO}.git" refs/heads/main | awk '{print $1}')"
           fi
@@ -83,130 +81,37 @@ jobs:
           echo "Source repository checked out successfully."
           git status
 
-      - name: Synchronize files to all repositories
+      - name: Force synchronize private space
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
           set -e
 
-          REPOS=(
-            "jasonntiri1-create/Pandora"
-            "jasonntiri1-create/spark-your-sparkle"
-            "jasonntiri1-create/link-happy-stuff"
-            "jasonntiri1-create/my-private-space"
-            "jasonntiri1-create/seamless-integration"
-          )
+          REPO="jasonntiri1-create/my-private-space"
 
-          for REPO in "${REPOS[@]}"; do
-            if [ "$REPO" = "$SOURCE_REPO" ]; then
-              echo "Skipping source repository: $REPO"
-              continue
-            fi
+          rm -rf target
+          git clone \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" \
+            target
 
-            echo ""
-            echo "========================================"
-            echo "Synchronizing: $REPO"
-            echo "========================================"
+          cd target
+          git checkout main
+          git config user.name "pandora-sync"
+          git config user.email "pandora-sync@users.noreply.github.com"
 
-            rm -rf target
+          echo "Replacing synchronized files with source files (preserving target workflows)..."
+          rsync -a --delete \
+            --exclude=".git/" \
+            --exclude=".github/workflows/" \
+            ../source/ ./
 
-            git clone \
-              "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" \
-              target
+          git add -A
 
-            cd target
+          if git diff --cached --quiet; then
+            echo "$REPO already has identical synchronized files."
+            exit 0
+          fi
 
-            git checkout main
-
-            git config user.name "pandora-sync"
-            git config user.email "pandora-sync@users.noreply.github.com"
-
-            echo "Replacing repository files with source files (preserving target workflows)..."
-
-            rsync -a --delete \
-              --exclude=".git/" \
-              --exclude=".github/workflows/" \
-              ../source/ ./
-
-            git add -A
-
-            if git diff --cached --quiet; then
-              echo "$REPO already has identical synchronized files."
-              cd ..
-              continue
-            fi
-
-            git commit \
-              -m "Sync files from $SOURCE_REPO"
-
-            git push origin main
-
-            echo "$REPO synchronized."
-
-            cd ..
-          done
-
-      - name: Verify file synchronization
-        env:
-          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
-        run: |
-          set -e
-
-          cd source
-
-          find . \
-            -type f \
-            -not -path "./.git/*" \
-            -not -path "./.github/workflows/*" \
-            -print0 \
-            | sort -z \
-            | xargs -0 sha256sum \
-            > ../source-files.sha256
-
-          cd ..
-
-          REPOS=(
-            "jasonntiri1-create/Pandora"
-            "jasonntiri1-create/spark-your-sparkle"
-            "jasonntiri1-create/link-happy-stuff"
-            "jasonntiri1-create/my-private-space"
-            "jasonntiri1-create/seamless-integration"
-          )
-
-          for REPO in "${REPOS[@]}"; do
-            if [ "$REPO" = "$SOURCE_REPO" ]; then
-              continue
-            fi
-
-            rm -rf verify
-
-            git clone --quiet \
-              "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" \
-              verify
-
-            cd verify
-
-            find . \
-              -type f \
-              -not -path "./.git/*" \
-              -not -path "./.github/workflows/*" \
-              -print0 \
-              | sort -z \
-              | xargs -0 sha256sum \
-              > ../target-files.sha256
-
-            cd ..
-
-            if ! diff -u source-files.sha256 target-files.sha256; then
-              echo "ERROR: Synchronized file contents differ in $REPO"
-              exit 1
-            fi
-
-            echo "$REPO: SYNCHRONIZED FILES IDENTICAL (target workflows preserved)"
-          done
-
-          echo ""
-          echo "========================================"
-          echo "ALL REPOSITORIES SYNCHRONIZED"
-          echo "TARGET GITHUB WORKFLOWS PRESERVED"
-          echo "========================================"
+          git commit -m "Sync files from $SOURCE_REPO"
+          git push --force origin main
+          echo "$REPO force-synchronized."
