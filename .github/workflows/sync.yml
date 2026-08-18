@@ -1,6 +1,10 @@
 name: Pandora File Sync
 
 on:
+  push:
+    branches:
+      - main
+
   repository_dispatch:
     types:
       - repository_changed
@@ -42,9 +46,14 @@ jobs:
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
             SOURCE_REPO="$DISPATCH_REPO"
             SOURCE_SHA="$DISPATCH_SHA"
-          else
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             SOURCE_REPO="$INPUT_REPO"
             SOURCE_SHA="$INPUT_SHA"
+          else
+            # A direct change to the sync controller is also a request to
+            # synchronize the current canonical seamless-integration tree.
+            SOURCE_REPO="jasonntiri1-create/seamless-integration"
+            SOURCE_SHA="$(git ls-remote "https://github.com/${SOURCE_REPO}.git" refs/heads/main | awk '{print $1}')"
           fi
 
           if [ -z "$SOURCE_REPO" ] || [ -z "$SOURCE_SHA" ]; then
